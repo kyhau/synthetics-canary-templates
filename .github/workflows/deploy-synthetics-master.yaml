@@ -36,6 +36,8 @@ jobs:
 
   deploy-synthetics:
     name: Deploy Synthetics common resources and canaries to desktop-prd
+    environment:
+      name: production
     needs: [lint]
     runs-on: ubuntu-latest
     env:

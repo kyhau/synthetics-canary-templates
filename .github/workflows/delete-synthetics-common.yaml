@@ -28,6 +28,8 @@ jobs:
 
   delete-synthetics-common:
     name: Delete synthetics-common stacks
+    environment:
+      name: production
     runs-on: ubuntu-latest
     env:
       account: ${{ github.event.inputs.account }}

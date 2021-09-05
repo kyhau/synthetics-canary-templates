@@ -1,0 +1,64 @@
+name: delete-synthetics-canaries
+
+on:
+  workflow_dispatch:
+    inputs:
+      account:
+        description: 'Which AWS account (alias) to deploy into'
+        required: true
+      region:
+        description: 'Target deployment region e.g. ap-southeast-2'
+        required: true
+        default: 'ap-southeast-2'
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  echo-parameters:
+    name: parameters
+    runs-on: ubuntu-latest
+    continue-on-error: false
+    steps:
+      - name: account ${{ github.event.inputs.account }}
+        run: echo
+      - name: region ${{ github.event.inputs.region }}
+        run: echo
+
+  delete-synthetics-canaries:
+    name: Delete synthetics-canaries stacks
+    runs-on: ubuntu-latest
+    env:
+      account: ${{ github.event.inputs.account }}
+      python-version: 3.9
+      region: ${{ github.event.inputs.region }}
+
+    steps:
+      - uses: actions/checkout@v2
+      - name: aws-credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        env:
+          AWS_ACCESS_KEY_ID_NAME: ${{ env.account }}_ACCESS_KEY_ID
+          AWS_SECRET_ACCESS_KEY_NAME: ${{ env.account }}_SECRET_ACCESS_KEY
+          AWS_DEFAULT_REGION: ${{ env.region }}
+        with:
+          aws-access-key-id: ${{ secrets[env.AWS_ACCESS_KEY_ID_NAME] }}
+          aws-secret-access-key: ${{ secrets[env.AWS_SECRET_ACCESS_KEY_NAME] }}
+          aws-region: ${{ env.region }}
+
+      # TODO retrieve lambda function name then delete the lambda function
+      # - name: Delete Lambda function first
+      #  run: aws lambda delete-function --function-name cwsyn-api-github-com-...
+
+      - name: Delete synthetics-api-canary-github-com stack
+        run: aws cloudformation delete-stack --stack-name synthetics-api-canary-github-com
+
+      - name: Wait until synthetics-api-canary-github-com stack delete complete
+        run: aws cloudformation wait stack-delete-complete --stack-name synthetics-api-canary-github-com
+
+      - name: Delete synthetics-canary-heartbeat-github-com stack
+        run: aws cloudformation delete-stack --stack-name synthetics-canary-heartbeat-github-com
+
+      - name: Wait until synthetics-canary-heartbeat-github-com stack delete complete
+        run: aws cloudformation wait stack-delete-complete --stack-name synthetics-canary-heartbeat-github-com

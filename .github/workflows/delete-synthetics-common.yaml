@@ -1,0 +1,63 @@
+name: delete-synthetics-common
+
+on:
+  workflow_dispatch:
+    inputs:
+      account:
+        description: 'Which AWS account (alias) to deploy into'
+        required: true
+      region:
+        description: 'Target deployment region e.g. ap-southeast-2'
+        required: true
+        default: 'ap-southeast-2'
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  echo-parameters:
+    name: parameters
+    runs-on: ubuntu-latest
+    continue-on-error: false
+    steps:
+      - name: account ${{ github.event.inputs.account }}
+        run: echo
+      - name: region ${{ github.event.inputs.region }}
+        run: echo
+
+  delete-synthetics-common:
+    name: Delete synthetics-common stacks
+    runs-on: ubuntu-latest
+    env:
+      account: ${{ github.event.inputs.account }}
+      python-version: 3.9
+      region: ${{ github.event.inputs.region }}
+
+    steps:
+      - uses: actions/checkout@v2
+      - name: aws-credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        env:
+          AWS_ACCESS_KEY_ID_NAME: ${{ env.account }}_ACCESS_KEY_ID
+          AWS_SECRET_ACCESS_KEY_NAME: ${{ env.account }}_SECRET_ACCESS_KEY
+          AWS_DEFAULT_REGION: ${{ env.region }}
+        with:
+          aws-access-key-id: ${{ secrets[env.AWS_ACCESS_KEY_ID_NAME] }}
+          aws-secret-access-key: ${{ secrets[env.AWS_SECRET_ACCESS_KEY_NAME] }}
+          aws-region: ${{ env.region }}
+
+      - id: accountid
+        run: |
+          echo "accountid=$(aws sts get-caller-identity --query Account --output text)" >> $GITHUB_ENV
+
+      - name: Empty the buckets
+        run: |
+          aws s3 rm s3://synthetics-common-code-${{ env.accountid }}-${{ env.region }} --recursive
+          aws s3 rm s3://synthetics-common-syn-results-${{ env.accountid }}-${{ env.region }} --recursive
+
+      - name: Delete synthetics-common stack
+        run: aws cloudformation delete-stack --stack-name synthetics-common
+
+      - name: Wait until synthetics-common stack delete complete
+        run: aws cloudformation wait stack-delete-complete --stack-name synthetics-common

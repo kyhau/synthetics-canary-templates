@@ -1,0 +1,112 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Description: AWS Synthetics Heartbeat Canary
+
+Parameters:
+  CanaryName:
+    Description: The name for this canary (e.g. hb-github-com)
+    Type: String
+    AllowedPattern: '^[0-9a-z_\-]+$'
+    ConstraintDescription: A name consists of up to 21 lowercase letters, numbers, hyphens or underscores with no spaces
+    MaxLength: 21
+  CommonStackName:
+    Description: The name of the common synthetics resources stack
+    Type: String
+    Default: synthetics-common
+  ScheduleExpression:
+    Description: Schedule expression e.g. cron(0 1 * * ? *) Run at 1:00am (UTC) every day
+    Type: String
+    Default: rate(0 minute)  # Run once at start
+  SubnetId1:
+    Description: VPC subnet ID
+    Type: AWS::EC2::Subnet::Id
+  SubnetId2:
+    Description: VPC subnet ID
+    Type: AWS::EC2::Subnet::Id
+  TargetUrl:
+    Description: The endpoint, API or url that you are testing (e.g. https://github.com/)
+    Type: String
+  VpcId:
+    Description: VPC ID
+    Type: AWS::EC2::VPC::Id
+
+Conditions:
+  VpcModeEnabled: !Not [!Equals [!Ref VpcId, '']]
+
+Resources:
+  Canary:
+    Type: AWS::Synthetics::Canary
+    Properties:
+      ArtifactS3Location: !ImportValue
+        Fn::Sub: ${CommonStackName}:artifact-s3-location
+      Code:
+        Handler: pageLoadBlueprint.handler
+        Script: |
+          from aws_synthetics.selenium import synthetics_webdriver as syn_webdriver
+          from aws_synthetics.common import synthetics_logger as logger
+          import os
+
+          TAKE_SCREENSHOT = os.environ.get("TAKE_SCREENSHOT", "false")
+          TARGET_URL = os.environ.get("TARGET_URL")
+
+          def main():
+              url = TARGET_URL
+
+              browser = syn_webdriver.Chrome()
+              browser.get(url)
+
+              if TAKE_SCREENSHOT.lower() == "true":
+                  browser.save_screenshot("loaded.png")
+
+              response_code = syn_webdriver.get_http_response(url)
+              if not response_code or response_code < 200 or response_code > 299:
+                  raise Exception("Failed to load page!")
+              logger.info("Canary successfully executed")
+
+          def handler(event, context):
+              # user defined log statements using synthetics_logger
+              logger.info("Selenium Python heartbeat canary")
+              return main()
+      ExecutionRoleArn: !ImportValue
+        Fn::Sub: ${CommonStackName}:synthetics-role-arn
+      Name: !Ref CanaryName
+      RuntimeVersion: syn-python-selenium-1.0
+      RunConfig:
+        EnvironmentVariables:
+          TAKE_SCREENSHOT: false
+          TARGET_URL: !Ref TargetUrl
+        TimeoutInSeconds: 60
+      StartCanaryAfterCreation: True
+      Schedule:
+        Expression: !Ref ScheduleExpression
+        DurationInSeconds: "3600"
+      SuccessRetentionPeriod: 90  # days
+      FailureRetentionPeriod: 90  # days
+      VPCConfig:
+        !If [VpcModeEnabled, {SecurityGroupIds: [!Ref CanaryLambdaFunctionSG], SubnetIds: [!Ref SubnetId1, !Ref SubnetId2]}, !Ref AWS::NoValue]
+
+  CanaryLambdaFunctionSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub SG of canary ${AWS::StackName}
+      VpcId: !Ref VpcId
+
+  CanaryAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub canary-${CanaryName}-Failed
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      DatapointsToAlarm: 1
+      Dimensions:
+        - Name: CanaryName
+          Value: !Ref CanaryName
+      EvaluationPeriods: 1
+      Namespace: CloudWatchSynthetics
+      MetricName: Failed
+      Period: 60
+      Statistic: Sum
+      Threshold: 1
+      AlarmActions:
+        - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:AlertTopic-Synthetics
+      OKActions:
+        - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:AlertTopic-Synthetics

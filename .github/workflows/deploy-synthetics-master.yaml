@@ -1,0 +1,114 @@
+name: deploy-synthetics-master
+
+on:
+  workflow_dispatch:
+    inputs:
+      account:
+        description: 'Which AWS account (alias) to deploy into'
+        required: true
+      region:
+        description: 'Target deployment region e.g. ap-southeast-2'
+        required: true
+        default: 'ap-southeast-2'
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  echo-parameters:
+    name: parameters
+    runs-on: ubuntu-latest
+    continue-on-error: false
+    steps:
+      - name: account ${{ github.event.inputs.account }}
+        run: echo
+      - name: region ${{ github.event.inputs.region }}
+        run: echo
+
+  lint:
+    name: Run yamllint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Run yamllint
+        run: yamllint -c ./.github/linters/.yaml-lint.yaml .github/ cloudformation/
+
+  deploy-synthetics:
+    name: Deploy Synthetics common resources and canaries to desktop-prd
+    needs: [lint]
+    runs-on: ubuntu-latest
+    env:
+      account: ${{ github.event.inputs.account }}
+      python-version: 3.9
+      region: ${{ github.event.inputs.region }}
+
+    steps:
+      - uses: actions/checkout@v2
+      - name: aws-credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        env:
+          AWS_ACCESS_KEY_ID_NAME: ${{ env.account }}_ACCESS_KEY_ID
+          AWS_SECRET_ACCESS_KEY_NAME: ${{ env.account }}_SECRET_ACCESS_KEY
+          AWS_DEFAULT_REGION: ${{ env.region }}
+        with:
+          aws-access-key-id: ${{ secrets[env.AWS_ACCESS_KEY_ID_NAME] }}
+          aws-secret-access-key: ${{ secrets[env.AWS_SECRET_ACCESS_KEY_NAME] }}
+          aws-region: ${{ env.region }}
+
+      - id: accountid
+        run: |
+          echo "accountid=$(aws sts get-caller-identity --query Account --output text)" >> $GITHUB_ENV
+
+      - name: Deploy synthetics-common stack to ${{ env.account }}
+        uses: aws-actions/aws-cloudformation-github-deploy@v1
+        with:
+          capabilities: CAPABILITY_NAMED_IAM
+          name: synthetics-common
+          no-fail-on-empty-changeset: 1
+          parameter-overrides: >-
+            NotificationEndpoint=
+          template: ./cloudformation/synthetics-common.yaml
+
+      - name: Package and upload canary script
+        id: CanaryScriptPackage
+        run: |
+          BUCKET_NAME=synthetics-common-code-${{ env.accountid }}-${{ env.region }}
+          cd ./src/canary_scripts
+          mkdir -p ./nodejs/node_modules/
+          cp api-canary.js ./nodejs/node_modules/api-github-com.js
+          zip -r api-github-com-$(git rev-parse --short HEAD).zip nodejs/
+          aws s3 cp --region $AWS_REGION api-github-com-$(git rev-parse --short HEAD).zip s3://$BUCKET_NAME/
+          rm -rf nodejs/
+          cd -
+          echo "::set-output name=CanaryScriptS3Key::api-github-com-$(git rev-parse --short HEAD).zip"
+
+      - name: Deploy synthetics-api-canary-github-com stack to ${{ env.account }}
+        uses: aws-actions/aws-cloudformation-github-deploy@v1
+        with:
+          name: synthetics-api-canary-github-com
+          no-fail-on-empty-changeset: 1
+          parameter-overrides: >-
+            CanaryName=api-github-com,
+            CanaryScriptPackageS3Key=${{ steps.CanaryScriptPackage.outputs.CanaryScriptS3Key }},
+            CommonStackName=synthetics-common,
+            SubnetId1=,
+            SubnetId2=,
+            TargetUrl=github.com,
+            VpcId=
+          template: ./cloudformation/synthetics-api-canary.yaml
+
+      - name: Deploy synthetics-canary-heartbeat-github-com stack to ${{ env.account }}
+        uses: aws-actions/aws-cloudformation-github-deploy@v1
+        with:
+          name: synthetics-canary-heartbeat-github-com
+          no-fail-on-empty-changeset: 1
+          parameter-overrides: >-
+            CanaryName=hb-github-com,
+            CommonStackName=synthetics-common,
+            ScheduleExpression=cron(0 1 * * ? *),
+            SubnetId1=,
+            SubnetId2=s,
+            TargetUrl=https://github.com,
+            VpcId=
+          template: ./cloudformation/synthetics-heartbeat-canary.yaml

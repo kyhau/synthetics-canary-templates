@@ -83,7 +83,7 @@ jobs:
           aws s3 cp --region $AWS_REGION api-github-com-$(git rev-parse --short HEAD).zip s3://$BUCKET_NAME/
           rm -rf nodejs/
           cd -
-          echo "::set-output name=CanaryScriptS3Key::api-github-com-$(git rev-parse --short HEAD).zip"
+          echo "CanaryScriptS3Key=api-github-com-$(git rev-parse --short HEAD).zip" >> $GITHUB_OUTPUT
 
       - name: Deploy synthetics-api-canary-github-com stack to ${{ env.account }}
         uses: aws-actions/aws-cloudformation-github-deploy@v1

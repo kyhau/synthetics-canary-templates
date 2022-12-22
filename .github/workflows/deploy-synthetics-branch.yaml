@@ -3,6 +3,7 @@ name: deploy-synthetics-branch
 on:
   push:
     branches-ignore:
+      - main
       - master
     paths:
       - .github/workflows/deploy-synthetics-branch.yaml
@@ -17,6 +18,6 @@ jobs:
     name: Run yamllint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - name: Run yamllint
         run: yamllint -c ./.github/linters/.yaml-lint.yaml .github/ cloudformation/

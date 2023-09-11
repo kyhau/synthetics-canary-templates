@@ -48,7 +48,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: aws-credentials
-        uses: aws-actions/configure-aws-credentials@v3.0.1
+        uses: aws-actions/configure-aws-credentials@v3.0.2
         env:
           AWS_ACCESS_KEY_ID_NAME: ${{ env.account }}_ACCESS_KEY_ID
           AWS_SECRET_ACCESS_KEY_NAME: ${{ env.account }}_SECRET_ACCESS_KEY
